@@ -30,9 +30,12 @@ header b{font-size:15px;font-weight:600}
 .badge{display:inline-flex;align-items:center;gap:6px;align-self:flex-start;border-radius:12px;padding:3px 10px;font-size:12px;font-weight:600}
 .b-ref{background:var(--primary-container);color:var(--on-primary-container)}
 .b-none{background:var(--grey-c);color:var(--muted)}
-.b-i{background:var(--warn-c);color:var(--on-warn-c)}
+.b-i{background:var(--info-c);color:var(--on-info-c)}
+.b-p{background:var(--warn-c);color:var(--on-warn-c)}
+.b-d{background:var(--grey-c);color:var(--muted)}
 .b-c{background:var(--ok-c);color:var(--on-ok-c)}
-.b-x{background:var(--err-c);color:var(--on-err-c)}
+.b-x{background:var(--grey-c);color:var(--muted)}
+.check{display:flex;gap:8px;align-items:flex-start;font-size:12.5px;color:var(--muted)}
 .b-u{background:var(--err-c);color:var(--on-err-c)}
 .mono{font-family:var(--mono)}
 .btn{display:flex;align-items:center;justify-content:center;gap:8px;min-height:38px;padding:6px 14px;border-radius:19px;border:0;font:600 14px var(--font);cursor:pointer;width:100%;text-align:center}
@@ -66,7 +69,7 @@ textarea{width:100%;height:70px;font:11px var(--mono);border:1px solid var(--out
 "use strict";
 const APP_URL = "https://claude.ai/artifact/XdtvXCrVTdJM53wCdGUYuB";
 const REF_RE = /([A-Z0-9][A-Z0-9/]*(?:\s*\+\s*[A-Z0-9][A-Z0-9/]*)*)\s+Order(?:\s+(\d+))?\s*-\s*(\d{1,2})\.(\d{1,2})\.(\d{4})/i;
-const STATUS_LABEL = { i: "Sent, waiting for delivery", c: "Complete", x: "Cancelled", d: "Draft in HSE Assistant", u: "Not tracked in HSE Assistant" };
+const STATUS_LABEL = { i: "Sent, nothing delivered yet", p: "Partially delivered", c: "Everything delivered", x: "Cancelled", d: "Draft in HSE Assistant", u: "Not tracked in HSE Assistant" };
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const iso = d => { d = d instanceof Date ? d : new Date(d); if (isNaN(d)) return ""; return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0"); };
@@ -95,8 +98,9 @@ function saveStatuses(obj) {
   });
 }
 function statusOf(subj) { if (!statuses) return null; const k = keyOf(subj); return statuses.s[k] || (refOf(subj) ? "u" : null); }
-function catFor(code) { if (!statuses) return ""; const c = statuses.cats || {}; return code === "i" ? c.open : code === "c" ? c.done : code === "x" ? c.cancelled : ""; }
-function ourCats() { const c = (statuses && statuses.cats) || {}; return [c.open, c.done, c.cancelled].filter(Boolean); }
+function catFor(code) { if (!statuses) return ""; const c = statuses.cats || {}; return code === "i" ? c.open : code === "p" ? c.partial : code === "c" ? c.done : ""; }
+function ourCats() { const c = (statuses && statuses.cats) || {}; return [c.open, c.partial, c.done].filter(Boolean); }
+function autoCats() { try { return Office.context.roamingSettings.get("autoCats") !== false; } catch { return true; } }
 const statusBadge = code => code ? `<span class="badge b-${code}">${esc(STATUS_LABEL[code])}</span>` : "";
 
 /* ---------- categories ---------- */
@@ -107,7 +111,7 @@ async function ensureMaster(names) {
   const r = await promisify(cb => mc.getAsync(cb)); if (!ok(r)) return;
   const have = new Set((r.value || []).map(c => c.displayName));
   const C = Office.MailboxEnums.CategoryColor;
-  const color = n => n === (statuses.cats || {}).done ? C.Preset4 : n === (statuses.cats || {}).cancelled ? C.Preset12 : C.Preset0;
+  const color = n => n === (statuses.cats || {}).done ? C.Preset4 : n === (statuses.cats || {}).partial ? C.Preset1 : C.Preset0;
   const missing = names.filter(n => n && !have.has(n)).map(n => ({ displayName: n, color: color(n) }));
   if (missing.length) await promisify(cb => mc.addAsync(missing, cb));
 }
@@ -123,7 +127,11 @@ async function setCategory(item, target) {
 /* ---------- reading mail ---------- */
 let current = null; // {kind, items, ids}
 let busy = 0;
-function itemSummary(it) { return { subject: it.subject || "", from: it.from ? it.from.emailAddress || "" : "", to: addrs(it.to), cc: addrs(it.cc), date: iso(it.dateTimeCreated) }; }
+function myAddress() { try { return String(Office.context.mailbox.userProfile.emailAddress || "").toLowerCase(); } catch { return ""; } }
+function itemSummary(it) {
+  const from = it.from ? it.from.emailAddress || "" : "";
+  return { subject: it.subject || "", from, mine: !!from && from.toLowerCase() === myAddress(), to: addrs(it.to), cc: addrs(it.cc), date: iso(it.dateTimeCreated) };
+}
 /* Turn the email's HTML into plain lines we control: table rows become tab-separated lines,
    list items keep their numbers, so size tables survive. */
 function htmlToText(html) {
@@ -215,13 +223,28 @@ async function refresh() {
     if (!item) { current = null; setMain(`<div class="hint">Open a sent order email, or select several emails, to check them against HSE Assistant.</div>`); renderStatusBox(); return; }
     current = { kind: "one", items: [item], ids: null };
     renderOne(item);
+    renderStatusBox();
+    autoCategory(item);
+    return;
   }
   renderStatusBox();
 }
+let masterChecked = false;
+async function autoCategory(item) {
+  if (!statuses || !canCats() || !autoCats()) return;
+  const target = catFor(statusOf(item.subject)); if (!target) return;
+  const it = Office.context.mailbox.item; if (!it || !it.categories) return;
+  const r = await promisify(cb => it.categories.getAsync(cb)); if (!ok(r)) return;
+  const cur = (r.value || []).map(c => c.displayName);
+  if (cur.includes(target) && !cur.some(c => ourCats().includes(c) && c !== target)) return;
+  if (!masterChecked) { await ensureMaster(ourCats()); masterChecked = true; }
+  if (await setCategory(it, target)) { const m = $("#catMsg"); if (m) m.innerHTML = `<div class="msg">Category set to “${esc(target)}”.</div>`; }
+}
 function actions() {
-  return `<button class="btn filled" id="open">Check in HSE Assistant</button>
-    <button class="btn outlined" id="copy">Copy for HSE Assistant</button>
-    <div class="hint">"Check" opens HSE Assistant in your browser. If it doesn't show the result, use "Copy", then press Ctrl+V on the Orders page of HSE Assistant.</div>`;
+  const one = current && current.kind === "one";
+  return `<button class="btn filled" id="open">Send to HSE Assistant</button>
+    <div class="hint">${one ? "Opens HSE Assistant with this email: an untracked order opens ready to track, a tracked one opens its order and is marked sent if needed." : "Opens HSE Assistant with these emails and shows which orders are tracked."} If the email doesn't show up there, press <b>Ctrl+V</b> on the Orders page.</div>
+    <button class="btn text" id="copy">Copy only</button>`;
 }
 function renderOne(it) {
   const ref = refOf(it.subject); const st = statusOf(it.subject);
@@ -246,6 +269,7 @@ function renderMany(items, total) {
 function bind() {
   $("#open").onclick = () => {
     if (!current) return;
+    copy(encode({ v: 1, kind: current.kind, items: current.items })).catch(() => {});
     const p = { v: 1, kind: current.kind, items: current.items.map(i => ({ ...i, body: i.body ? i.body.slice(0, 4000) : undefined })) };
     const url = APP_URL + "#" + encode(p);
     try { if (Office.context.ui && Office.context.ui.openBrowserWindow) { Office.context.ui.openBrowserWindow(url); return; } } catch {}
@@ -286,8 +310,10 @@ function renderStatusBox() {
   box.innerHTML = `${statuses ? `<div class="kv">Statuses for ${n} orders, copied from HSE Assistant ${when ? when.toLocaleString("da-DK", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : ""}.</div>` : `<div class="kv">To see each order's status here and set Outlook categories, copy the statuses from HSE Assistant (Settings → Copy statuses for Outlook) and paste them below.</div>`}
     ${applyBtn}
     <div id="catMsg"></div>
+    ${statuses ? `<label class="check"><input type="checkbox" id="autoC" ${autoCats() ? "checked" : ""}> Set the category automatically when I open an order email</label>` : ""}
     <button class="btn text" id="upd">${statuses ? "Update statuses" : "Paste statuses"}</button>
     <div id="pasteBox" hidden><textarea id="stPaste" placeholder="Paste here (HSES1-…)"></textarea></div>`;
+  const ac = $("#autoC"); if (ac) ac.onchange = () => { try { Office.context.roamingSettings.set("autoCats", ac.checked); Office.context.roamingSettings.saveAsync(() => {}); } catch {} if (ac.checked && current && current.kind === "one") autoCategory(current.items[0]); };
   $("#upd").onclick = () => { $("#pasteBox").hidden = false; $("#stPaste").focus(); };
   $("#stPaste").oninput = async e => {
     const m = /HSES1-([A-Za-z0-9_-]+)/.exec(e.target.value || "");
@@ -296,13 +322,15 @@ function renderStatusBox() {
     try {
       const o = JSON.parse(unb64url(m[1]));
       if (!o || typeof o.s !== "object") throw 0;
-      const clean = { at: String(o.at || ""), cats: { open: String((o.cats || {}).open || ""), done: String((o.cats || {}).done || ""), cancelled: String((o.cats || {}).cancelled || "") }, s: {} };
-      Object.entries(o.s).slice(0, 450).forEach(([k, v]) => { if (/^[icxd]$/.test(v)) clean.s[String(k).slice(0, 120)] = v; });
+      const oc = o.cats || {};
+      const clean = { at: String(o.at || ""), cats: { open: String(oc.open || ""), partial: String(oc.partial || ""), done: String(oc.done || "") }, s: {} };
+      Object.entries(o.s).slice(0, 450).forEach(([k, v]) => { if (/^[icpxd]$/.test(v)) clean.s[String(k).slice(0, 120)] = v; });
       const saved = await saveStatuses(clean);
       statuses = clean;
       if (current && current.kind === "one") renderOne(current.items[0]); else if (current) renderMany(current.items, current.items.length);
       renderStatusBox();
       $("#catMsg").innerHTML = `<div class="msg">${saved ? "Statuses updated." : "Statuses loaded for now, but Outlook didn't save them for next time."}</div>`;
+      if (current && current.kind === "one") autoCategory(current.items[0]);
     } catch { msg.innerHTML = `<div class="msg err">Couldn't read the statuses. Copy them again from HSE Assistant.</div>`; }
   };
   const ap = $("#apply"); if (ap) ap.onclick = applyCategories;
