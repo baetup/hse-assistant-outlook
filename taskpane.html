@@ -9,13 +9,15 @@
 :root{
   --primary:#934B00; --on-primary:#fff; --primary-container:#FFDBC7; --on-primary-container:#311300;
   --surface:#FFFFFF; --surface-low:#FFF5EF; --on-surface:#221A15; --muted:#53443B; --outline:#D8C2B7;
-  --ok:#2C6B2F; --ok-c:#B3F1A9; --on-ok-c:#002203; --info-c:#D0E4FF; --on-info-c:#001D34; --grey-c:#EFE6E1;
+  --ok-c:#B3F1A9; --on-ok-c:#002203; --warn-c:#FFDF9E; --on-warn-c:#261A00; --err-c:#FFDAD6; --on-err-c:#410002;
+  --info-c:#D0E4FF; --on-info-c:#001D34; --grey-c:#EFE6E1;
   --font:"Segoe UI Variable Text","Segoe UI",Roboto,system-ui,sans-serif; --mono:Consolas,"Roboto Mono",monospace;
 }
 @media (prefers-color-scheme:dark){:root{
   --primary:#FFB688; --on-primary:#502400; --primary-container:#713700; --on-primary-container:#FFDBC7;
   --surface:#1F1F1F; --surface-low:#2A2420; --on-surface:#F0DFD7; --muted:#D8C2B7; --outline:#53443B;
-  --ok:#98D58F; --ok-c:#12521A; --on-ok-c:#B3F1A9; --info-c:#004A78; --on-info-c:#D0E4FF; --grey-c:#3D332D; color-scheme:dark}}
+  --ok-c:#12521A; --on-ok-c:#B3F1A9; --warn-c:#5C4300; --on-warn-c:#FFDF9E; --err-c:#93000A; --on-err-c:#FFDAD6;
+  --info-c:#004A78; --on-info-c:#D0E4FF; --grey-c:#3D332D; color-scheme:dark}}
 *{box-sizing:border-box}
 body{margin:0;background:var(--surface);color:var(--on-surface);font:14px/1.45 var(--font)}
 .wrap{padding:14px 14px 24px;display:flex;flex-direction:column;gap:14px}
@@ -28,16 +30,24 @@ header b{font-size:15px;font-weight:600}
 .badge{display:inline-flex;align-items:center;gap:6px;align-self:flex-start;border-radius:12px;padding:3px 10px;font-size:12px;font-weight:600}
 .b-ref{background:var(--primary-container);color:var(--on-primary-container)}
 .b-none{background:var(--grey-c);color:var(--muted)}
+.b-i{background:var(--warn-c);color:var(--on-warn-c)}
+.b-c{background:var(--ok-c);color:var(--on-ok-c)}
+.b-x{background:var(--err-c);color:var(--on-err-c)}
+.b-u{background:var(--err-c);color:var(--on-err-c)}
 .mono{font-family:var(--mono)}
-.btn{display:flex;align-items:center;justify-content:center;gap:8px;height:38px;border-radius:19px;border:0;font:600 14px var(--font);cursor:pointer;width:100%}
+.btn{display:flex;align-items:center;justify-content:center;gap:8px;min-height:38px;padding:6px 14px;border-radius:19px;border:0;font:600 14px var(--font);cursor:pointer;width:100%;text-align:center}
 .btn.filled{background:var(--primary);color:var(--on-primary)}
 .btn.outlined{background:transparent;color:var(--primary);border:1px solid var(--primary)}
+.btn.text{background:transparent;color:var(--primary);width:auto;padding:4px 8px;min-height:30px;align-self:flex-start}
+.btn:disabled{opacity:.45;cursor:default}
 .btn:focus-visible{outline:2px solid var(--primary);outline-offset:2px}
 .hint{font-size:12.5px;color:var(--muted)}
 .msg{font-size:13px;border-radius:8px;padding:8px 10px;background:var(--ok-c);color:var(--on-ok-c)}
 .msg.info{background:var(--info-c);color:var(--on-info-c)}
+.msg.err{background:var(--err-c);color:var(--on-err-c)}
+h2{font-size:13px;font-weight:600;margin:4px 0 0;text-transform:uppercase;letter-spacing:.4px;color:var(--muted)}
 ul{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px;max-height:300px;overflow:auto}
-li{font-size:12.5px;display:flex;flex-direction:column;gap:2px;padding:6px 8px;border-radius:8px;background:var(--surface)}
+li{font-size:12.5px;display:flex;flex-direction:column;gap:3px;padding:6px 8px;border-radius:8px;background:var(--surface)}
 li .r{font-family:var(--mono);font-size:11.5px;color:var(--primary)}
 li .n{color:var(--muted)}
 textarea{width:100%;height:70px;font:11px var(--mono);border:1px solid var(--outline);border-radius:6px;background:transparent;color:inherit;padding:6px}
@@ -48,48 +58,85 @@ textarea{width:100%;height:70px;font:11px var(--mono);border:1px solid var(--out
 <div class="wrap">
   <header><img src="assets/icon-64.png" alt=""><b>HSE Assistant</b></header>
   <div id="main"><div class="hint">Loading…</div></div>
-  <div id="out" class="stack" hidden></div>
+  <div id="out" hidden></div>
+  <h2>Statuses &amp; categories</h2>
+  <div id="statusBox" class="card"></div>
 </div>
 <script>
 "use strict";
 const APP_URL = "https://claude.ai/artifact/XdtvXCrVTdJM53wCdGUYuB";
-const REF_RE = /([A-Z0-9]+(?:\s*\+\s*[A-Z0-9]+)*)\s+Order(?:\s+(\d+))?\s*-\s*(\d{1,2})\.(\d{1,2})\.(\d{4})/i;
+const REF_RE = /([A-Z0-9][A-Z0-9/]*(?:\s*\+\s*[A-Z0-9][A-Z0-9/]*)*)\s+Order(?:\s+(\d+))?\s*-\s*(\d{1,2})\.(\d{1,2})\.(\d{4})/i;
+const STATUS_LABEL = { i: "Sent, waiting for delivery", c: "Complete", x: "Cancelled", d: "Draft in HSE Assistant", u: "Not tracked in HSE Assistant" };
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const iso = d => { d = d instanceof Date ? d : new Date(d); if (isNaN(d)) return ""; return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0"); };
 const dmy = s => s ? s.slice(8, 10) + "." + s.slice(5, 7) + "." + s.slice(0, 4) : "";
 const addrs = a => (a || []).map(x => x && x.emailAddress).filter(Boolean);
 const refOf = subj => { const m = REF_RE.exec(subj || ""); return m ? m[0].replace(/\s+/g, " ").trim() : ""; };
+const cleanSubject = s => String(s || "").replace(/^\s*((re|fw|fwd|sv|vs|aw|wg)\s*:\s*)+/i, "").trim();
+const normRef = s => String(s || "").toLowerCase().replace(/\//g, "").replace(/\s*\+\s*/g, "+").replace(/\s*-\s*/g, "-").replace(/\s+/g, " ").trim();
+const keyOf = subj => normRef(refOf(subj) || cleanSubject(subj));
+const ok = r => r && r.status === Office.AsyncResultStatus.Succeeded;
 
 function b64url(str) {
   const bytes = new TextEncoder().encode(str); let bin = "";
   for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
   return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
+function unb64url(s) { let b = s.replace(/-/g, "+").replace(/_/g, "/"); while (b.length % 4) b += "="; const bin = atob(b); return new TextDecoder().decode(Uint8Array.from(bin, c => c.charCodeAt(0))); }
 const encode = obj => "HSEA1-" + b64url(JSON.stringify(obj));
 
-let current = null; // {kind, items}
-let busy = 0;
-
-function itemSummary(it) {
-  return { subject: it.subject || "", from: it.from ? it.from.emailAddress || "" : "", to: addrs(it.to), cc: addrs(it.cc), date: iso(it.dateTimeCreated) };
-}
-function readCurrent() {
-  const it = Office.context.mailbox.item;
-  if (!it) return Promise.resolve(null);
-  const base = itemSummary(it);
+/* ---------- statuses from HSE Assistant (kept in the add-in's roaming settings) ---------- */
+let statuses = null; // {at, cats:{open,done,cancelled}, s:{key: i|c|x|d}}
+function loadStatuses() { try { const v = Office.context.roamingSettings.get("hses"); statuses = v ? JSON.parse(v) : null; } catch { statuses = null; } }
+function saveStatuses(obj) {
   return new Promise(res => {
-    try { it.body.getAsync(Office.CoercionType.Text, r => { base.body = r.status === Office.AsyncResultStatus.Succeeded ? String(r.value || "").slice(0, 6000) : ""; res(base); }); }
-    catch { res(base); }
+    try { Office.context.roamingSettings.set("hses", JSON.stringify(obj)); Office.context.roamingSettings.saveAsync(r => res(ok(r))); } catch { res(false); }
   });
 }
-function loadOne(id) {
+function statusOf(subj) { if (!statuses) return null; const k = keyOf(subj); return statuses.s[k] || (refOf(subj) ? "u" : null); }
+function catFor(code) { if (!statuses) return ""; const c = statuses.cats || {}; return code === "i" ? c.open : code === "c" ? c.done : code === "x" ? c.cancelled : ""; }
+function ourCats() { const c = (statuses && statuses.cats) || {}; return [c.open, c.done, c.cancelled].filter(Boolean); }
+const statusBadge = code => code ? `<span class="badge b-${code}">${esc(STATUS_LABEL[code])}</span>` : "";
+
+/* ---------- categories ---------- */
+const canCats = () => Office.context.requirements.isSetSupported("Mailbox", "1.8");
+function promisify(fn) { return new Promise(res => { try { fn(r => res(r)); } catch (e) { res({ status: "failed", error: e }); } }); }
+async function ensureMaster(names) {
+  const mc = Office.context.mailbox.masterCategories; if (!mc) return;
+  const r = await promisify(cb => mc.getAsync(cb)); if (!ok(r)) return;
+  const have = new Set((r.value || []).map(c => c.displayName));
+  const C = Office.MailboxEnums.CategoryColor;
+  const color = n => n === (statuses.cats || {}).done ? C.Preset4 : n === (statuses.cats || {}).cancelled ? C.Preset12 : C.Preset0;
+  const missing = names.filter(n => n && !have.has(n)).map(n => ({ displayName: n, color: color(n) }));
+  if (missing.length) await promisify(cb => mc.addAsync(missing, cb));
+}
+async function setCategory(item, target) {
+  const r = await promisify(cb => item.categories.getAsync(cb)); if (!ok(r)) return false;
+  const cur = (r.value || []).map(c => c.displayName);
+  const rm = cur.filter(c => ourCats().includes(c) && c !== target);
+  if (rm.length) { const r2 = await promisify(cb => item.categories.removeAsync(rm, cb)); if (!ok(r2)) return false; }
+  if (target && !cur.includes(target)) { const r3 = await promisify(cb => item.categories.addAsync([target], cb)); if (!ok(r3)) return false; }
+  return true;
+}
+
+/* ---------- reading mail ---------- */
+let current = null; // {kind, items, ids}
+let busy = 0;
+function itemSummary(it) { return { subject: it.subject || "", from: it.from ? it.from.emailAddress || "" : "", to: addrs(it.to), cc: addrs(it.cc), date: iso(it.dateTimeCreated) }; }
+function readCurrent() {
+  const it = Office.context.mailbox.item; if (!it) return Promise.resolve(null);
+  const base = itemSummary(it);
+  return new Promise(res => { try { it.body.getAsync(Office.CoercionType.Text, r => { base.body = ok(r) ? String(r.value || "").slice(0, 6000) : ""; res(base); }); } catch { res(base); } });
+}
+function withLoaded(id, fn) {
   return new Promise(res => {
     try {
-      Office.context.mailbox.loadItemByIdAsync(id, r => {
-        if (r.status !== Office.AsyncResultStatus.Succeeded) return res(null);
-        const it = r.value; const s = itemSummary(it);
-        try { it.unloadAsync(() => res(s)); } catch { res(s); }
+      Office.context.mailbox.loadItemByIdAsync(id, async r => {
+        if (!ok(r)) return res(null);
+        const it = r.value; let out = null;
+        try { out = await fn(it); } catch { out = null; }
+        try { it.unloadAsync(() => res(out)); } catch { res(out); }
       });
     } catch { res(null); }
   });
@@ -98,9 +145,8 @@ async function readSelected(list) {
   const canLoad = Office.context.requirements.isSetSupported("Mailbox", "1.15");
   const out = [];
   for (let i = 0; i < list.length; i++) {
-    const sel = list[i];
-    let s = null;
-    if (canLoad) { setMain(`<div class="hint">Reading ${i + 1} of ${list.length} emails…</div>`); s = await loadOne(sel.itemId); }
+    const sel = list[i]; let s = null;
+    if (canLoad) { setMain(`<div class="hint">Reading ${i + 1} of ${list.length} emails…</div>`); s = await withLoaded(sel.itemId, it => itemSummary(it)); }
     out.push(s ? { ...s, subject: s.subject || sel.subject || "" } : { subject: sel.subject || "", from: "", to: [], cc: [], date: "" });
   }
   return out;
@@ -108,24 +154,25 @@ async function readSelected(list) {
 function setMain(h) { $("#main").innerHTML = h; }
 
 async function refresh() {
-  const my = ++busy;
-  $("#out").hidden = true;
+  const my = ++busy; $("#out").hidden = true;
   let selected = null;
   if (Office.context.requirements.isSetSupported("Mailbox", "1.13") && Office.context.mailbox.getSelectedItemsAsync) {
-    selected = await new Promise(res => { try { Office.context.mailbox.getSelectedItemsAsync(r => res(r.status === Office.AsyncResultStatus.Succeeded ? r.value : null)); } catch { res(null); } });
+    selected = await new Promise(res => { try { Office.context.mailbox.getSelectedItemsAsync(r => res(ok(r) ? r.value : null)); } catch { res(null); } });
   }
   if (selected && selected.length > 1) {
-    const items = await readSelected(selected.slice(0, 100));
+    const sl = selected.slice(0, 100);
+    const items = await readSelected(sl);
     if (my !== busy) return;
-    current = { v: 1, kind: "many", items };
+    current = { kind: "many", items, ids: sl.map(x => x.itemId) };
     renderMany(items, selected.length);
   } else {
     const item = await readCurrent();
     if (my !== busy) return;
-    if (!item) { current = null; setMain(`<div class="hint">Open a sent order email, or select several emails, to check them against HSE Assistant.</div>`); return; }
-    current = { v: 1, kind: "one", items: [item] };
+    if (!item) { current = null; setMain(`<div class="hint">Open a sent order email, or select several emails, to check them against HSE Assistant.</div>`); renderStatusBox(); return; }
+    current = { kind: "one", items: [item], ids: null };
     renderOne(item);
   }
+  renderStatusBox();
 }
 function actions() {
   return `<button class="btn filled" id="open">Check in HSE Assistant</button>
@@ -133,51 +180,113 @@ function actions() {
     <div class="hint">"Check" opens HSE Assistant in your browser. If it doesn't show the result, use "Copy", then press Ctrl+V on the Orders page of HSE Assistant.</div>`;
 }
 function renderOne(it) {
-  const ref = refOf(it.subject);
+  const ref = refOf(it.subject); const st = statusOf(it.subject);
   setMain(`<div class="card">
       <div class="subj">${esc(it.subject || "(no subject)")}</div>
       ${ref ? `<span class="badge b-ref">Order reference · <span class="mono">${esc(ref)}</span></span>` : `<span class="badge b-none">No order reference in the subject</span>`}
+      ${statusBadge(st)}
       <div class="kv">To: ${esc(it.to.join(", ") || "—")}${it.cc.length ? `<br>CC: ${esc(it.cc.join(", "))}` : ""}<br>Date: ${esc(dmy(it.date))}</div>
     </div>${actions()}`);
   bind();
 }
 function renderMany(items, total) {
   const withRef = items.filter(i => refOf(i.subject)).length;
+  const untracked = statuses ? items.filter(i => statusOf(i.subject) === "u").length : null;
   setMain(`<div class="card">
       <div class="subj">${total} emails selected</div>
-      <div class="kv">${withRef} have an order reference in the subject.${total > 100 ? " Only the first 100 are checked." : ""}</div>
-      <ul>${items.map(i => { const r = refOf(i.subject); return `<li><span>${esc(i.subject || "(no subject)")}</span>${r ? `<span class="r">${esc(r)}</span>` : `<span class="n">No order reference</span>`}</li>`; }).join("")}</ul>
+      <div class="kv">${withRef} have an order reference in the subject.${untracked ? ` <b>${untracked} not tracked</b> as of the last status update.` : ""}${total > 100 ? " Only the first 100 are checked." : ""}</div>
+      <ul>${items.map(i => { const r = refOf(i.subject); const st = statusOf(i.subject); return `<li><span>${esc(i.subject || "(no subject)")}</span>${r ? `<span class="r">${esc(r)}</span>` : `<span class="n">No order reference</span>`}${statusBadge(st)}</li>`; }).join("")}</ul>
     </div>${actions()}`);
   bind();
 }
 function bind() {
   $("#open").onclick = () => {
     if (!current) return;
-    const p = { ...current, items: current.items.map(i => ({ ...i, body: i.body ? i.body.slice(0, 2500) : undefined })) };
+    const p = { v: 1, kind: current.kind, items: current.items.map(i => ({ ...i, body: i.body ? i.body.slice(0, 2500) : undefined })) };
     const url = APP_URL + "#" + encode(p);
     try { if (Office.context.ui && Office.context.ui.openBrowserWindow) { Office.context.ui.openBrowserWindow(url); return; } } catch {}
     window.open(url, "_blank");
   };
   $("#copy").onclick = async () => {
     if (!current) return;
-    const text = encode(current);
-    const out = $("#out");
-    let ok = false;
-    try { await navigator.clipboard.writeText(text); ok = true; } catch {}
-    if (!ok) {
-      const ta = document.createElement("textarea"); ta.value = text; document.body.appendChild(ta); ta.select();
-      try { ok = document.execCommand("copy"); } catch {}
-      ta.remove();
-    }
-    out.hidden = false;
-    out.innerHTML = ok
+    const text = encode({ v: 1, kind: current.kind, items: current.items });
+    const done = await copy(text);
+    const out = $("#out"); out.hidden = false;
+    out.innerHTML = done
       ? `<div class="msg">Copied. Open HSE Assistant and press <b>Ctrl+V</b> on the Orders page.</div>`
       : `<div class="msg info">Your Outlook blocked copying. Select the text below, press Ctrl+C, then paste it in HSE Assistant.</div><textarea id="manual" readonly>${esc(text)}</textarea>`;
     const m = $("#manual"); if (m) { m.focus(); m.select(); }
   };
 }
+async function copy(text) {
+  try { await navigator.clipboard.writeText(text); return true; } catch {}
+  try { const ta = document.createElement("textarea"); ta.value = text; document.body.appendChild(ta); ta.select(); const r = document.execCommand("copy"); ta.remove(); return r; } catch { return false; }
+}
+
+/* ---------- status box ---------- */
+function renderStatusBox() {
+  const box = $("#statusBox");
+  const when = statuses && statuses.at ? new Date(statuses.at) : null;
+  const n = statuses ? Object.keys(statuses.s || {}).length : 0;
+  let applyBtn = "";
+  if (statuses && current && canCats()) {
+    if (current.kind === "one") {
+      const st = statusOf(current.items[0].subject);
+      const cat = catFor(st);
+      if (cat) applyBtn = `<button class="btn filled" id="apply">Set category “${esc(cat)}”</button>`;
+    } else {
+      const k = current.items.filter(i => catFor(statusOf(i.subject))).length;
+      if (k) applyBtn = `<button class="btn filled" id="apply">Set categories on ${k} email${k > 1 ? "s" : ""}</button>`;
+    }
+  }
+  box.innerHTML = `${statuses ? `<div class="kv">Statuses for ${n} orders, copied from HSE Assistant ${when ? when.toLocaleString("da-DK", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : ""}.</div>` : `<div class="kv">To see each order's status here and set Outlook categories, copy the statuses from HSE Assistant (Settings → Copy statuses for Outlook) and paste them below.</div>`}
+    ${applyBtn}
+    <div id="catMsg"></div>
+    <button class="btn text" id="upd">${statuses ? "Update statuses" : "Paste statuses"}</button>
+    <div id="pasteBox" hidden><textarea id="stPaste" placeholder="Paste here (HSES1-…)"></textarea></div>`;
+  $("#upd").onclick = () => { $("#pasteBox").hidden = false; $("#stPaste").focus(); };
+  $("#stPaste").oninput = async e => {
+    const m = /HSES1-([A-Za-z0-9_-]+)/.exec(e.target.value || "");
+    const msg = $("#catMsg");
+    if (!m) { msg.innerHTML = `<div class="msg err">That isn't the status text copied from HSE Assistant.</div>`; return; }
+    try {
+      const o = JSON.parse(unb64url(m[1]));
+      if (!o || typeof o.s !== "object") throw 0;
+      const clean = { at: String(o.at || ""), cats: { open: String((o.cats || {}).open || ""), done: String((o.cats || {}).done || ""), cancelled: String((o.cats || {}).cancelled || "") }, s: {} };
+      Object.entries(o.s).slice(0, 450).forEach(([k, v]) => { if (/^[icxd]$/.test(v)) clean.s[String(k).slice(0, 120)] = v; });
+      const saved = await saveStatuses(clean);
+      statuses = clean;
+      if (current && current.kind === "one") renderOne(current.items[0]); else if (current) renderMany(current.items, current.items.length);
+      renderStatusBox();
+      $("#catMsg").innerHTML = `<div class="msg">${saved ? "Statuses updated." : "Statuses loaded for now, but Outlook didn't save them for next time."}</div>`;
+    } catch { msg.innerHTML = `<div class="msg err">Couldn't read the statuses. Copy them again from HSE Assistant.</div>`; }
+  };
+  const ap = $("#apply"); if (ap) ap.onclick = applyCategories;
+}
+async function applyCategories() {
+  const msg = $("#catMsg"); const btn = $("#apply"); btn.disabled = true;
+  msg.innerHTML = `<div class="msg info">Updating categories…</div>`;
+  await ensureMaster(ourCats());
+  let done = 0, failed = 0;
+  if (current.kind === "one") {
+    const cat = catFor(statusOf(current.items[0].subject));
+    (await setCategory(Office.context.mailbox.item, cat)) ? done++ : failed++;
+  } else {
+    for (let i = 0; i < current.items.length; i++) {
+      const cat = catFor(statusOf(current.items[i].subject)); if (!cat) continue;
+      msg.innerHTML = `<div class="msg info">Updating ${i + 1} of ${current.items.length}…</div>`;
+      const r = await withLoaded(current.ids[i], it => setCategory(it, cat));
+      r ? done++ : failed++;
+    }
+  }
+  btn.disabled = false;
+  msg.innerHTML = failed
+    ? `<div class="msg err">Updated ${done}, couldn't update ${failed}. Open those emails one by one and try again.</div>`
+    : `<div class="msg">Category set on ${done} email${done === 1 ? "" : "s"}.</div>`;
+}
 
 Office.onReady(() => {
+  loadStatuses();
   try { Office.context.mailbox.addHandlerAsync(Office.EventType.ItemChanged, refresh); } catch {}
   try { if (Office.EventType.SelectedItemsChanged) Office.context.mailbox.addHandlerAsync(Office.EventType.SelectedItemsChanged, refresh); } catch {}
   refresh();
