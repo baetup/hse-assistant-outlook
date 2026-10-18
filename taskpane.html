@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>HSE Assistant · Order check</title>
+<script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+<style>
+:root{
+  --primary:#934B00; --on-primary:#fff; --primary-container:#FFDBC7; --on-primary-container:#311300;
+  --surface:#FFFFFF; --surface-low:#FFF5EF; --on-surface:#221A15; --muted:#53443B; --outline:#D8C2B7;
+  --ok:#2C6B2F; --ok-c:#B3F1A9; --on-ok-c:#002203; --info-c:#D0E4FF; --on-info-c:#001D34; --grey-c:#EFE6E1;
+  --font:"Segoe UI Variable Text","Segoe UI",Roboto,system-ui,sans-serif; --mono:Consolas,"Roboto Mono",monospace;
+}
+@media (prefers-color-scheme:dark){:root{
+  --primary:#FFB688; --on-primary:#502400; --primary-container:#713700; --on-primary-container:#FFDBC7;
+  --surface:#1F1F1F; --surface-low:#2A2420; --on-surface:#F0DFD7; --muted:#D8C2B7; --outline:#53443B;
+  --ok:#98D58F; --ok-c:#12521A; --on-ok-c:#B3F1A9; --info-c:#004A78; --on-info-c:#D0E4FF; --grey-c:#3D332D; color-scheme:dark}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--surface);color:var(--on-surface);font:14px/1.45 var(--font)}
+.wrap{padding:14px 14px 24px;display:flex;flex-direction:column;gap:14px}
+header{display:flex;align-items:center;gap:10px}
+header img{width:28px;height:28px;border-radius:4px}
+header b{font-size:15px;font-weight:600}
+.card{background:var(--surface-low);border-radius:12px;padding:12px;display:flex;flex-direction:column;gap:8px}
+.subj{font-weight:600;overflow-wrap:anywhere}
+.kv{font-size:12.5px;color:var(--muted);overflow-wrap:anywhere}
+.badge{display:inline-flex;align-items:center;gap:6px;align-self:flex-start;border-radius:12px;padding:3px 10px;font-size:12px;font-weight:600}
+.b-ref{background:var(--primary-container);color:var(--on-primary-container)}
+.b-none{background:var(--grey-c);color:var(--muted)}
+.mono{font-family:var(--mono)}
+.btn{display:flex;align-items:center;justify-content:center;gap:8px;height:38px;border-radius:19px;border:0;font:600 14px var(--font);cursor:pointer;width:100%}
+.btn.filled{background:var(--primary);color:var(--on-primary)}
+.btn.outlined{background:transparent;color:var(--primary);border:1px solid var(--primary)}
+.btn:focus-visible{outline:2px solid var(--primary);outline-offset:2px}
+.hint{font-size:12.5px;color:var(--muted)}
+.msg{font-size:13px;border-radius:8px;padding:8px 10px;background:var(--ok-c);color:var(--on-ok-c)}
+.msg.info{background:var(--info-c);color:var(--on-info-c)}
+ul{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px;max-height:300px;overflow:auto}
+li{font-size:12.5px;display:flex;flex-direction:column;gap:2px;padding:6px 8px;border-radius:8px;background:var(--surface)}
+li .r{font-family:var(--mono);font-size:11.5px;color:var(--primary)}
+li .n{color:var(--muted)}
+textarea{width:100%;height:70px;font:11px var(--mono);border:1px solid var(--outline);border-radius:6px;background:transparent;color:inherit;padding:6px}
+[hidden]{display:none!important}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header><img src="assets/icon-64.png" alt=""><b>HSE Assistant</b></header>
+  <div id="main"><div class="hint">Loading…</div></div>
+  <div id="out" class="stack" hidden></div>
+</div>
+<script>
+"use strict";
+const APP_URL = "https://claude.ai/artifact/XdtvXCrVTdJM53wCdGUYuB";
+const REF_RE = /([A-Z0-9]+(?:\s*\+\s*[A-Z0-9]+)*)\s+Order(?:\s+(\d+))?\s*-\s*(\d{1,2})\.(\d{1,2})\.(\d{4})/i;
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const iso = d => { d = d instanceof Date ? d : new Date(d); if (isNaN(d)) return ""; return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0"); };
+const dmy = s => s ? s.slice(8, 10) + "." + s.slice(5, 7) + "." + s.slice(0, 4) : "";
+const addrs = a => (a || []).map(x => x && x.emailAddress).filter(Boolean);
+const refOf = subj => { const m = REF_RE.exec(subj || ""); return m ? m[0].replace(/\s+/g, " ").trim() : ""; };
+
+function b64url(str) {
+  const bytes = new TextEncoder().encode(str); let bin = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+const encode = obj => "HSEA1-" + b64url(JSON.stringify(obj));
+
+let current = null; // {kind, items}
+let busy = 0;
+
+function itemSummary(it) {
+  return { subject: it.subject || "", from: it.from ? it.from.emailAddress || "" : "", to: addrs(it.to), cc: addrs(it.cc), date: iso(it.dateTimeCreated) };
+}
+function readCurrent() {
+  const it = Office.context.mailbox.item;
+  if (!it) return Promise.resolve(null);
+  const base = itemSummary(it);
+  return new Promise(res => {
+    try { it.body.getAsync(Office.CoercionType.Text, r => { base.body = r.status === Office.AsyncResultStatus.Succeeded ? String(r.value || "").slice(0, 6000) : ""; res(base); }); }
+    catch { res(base); }
+  });
+}
+function loadOne(id) {
+  return new Promise(res => {
+    try {
+      Office.context.mailbox.loadItemByIdAsync(id, r => {
+        if (r.status !== Office.AsyncResultStatus.Succeeded) return res(null);
+        const it = r.value; const s = itemSummary(it);
+        try { it.unloadAsync(() => res(s)); } catch { res(s); }
+      });
+    } catch { res(null); }
+  });
+}
+async function readSelected(list) {
+  const canLoad = Office.context.requirements.isSetSupported("Mailbox", "1.15");
+  const out = [];
+  for (let i = 0; i < list.length; i++) {
+    const sel = list[i];
+    let s = null;
+    if (canLoad) { setMain(`<div class="hint">Reading ${i + 1} of ${list.length} emails…</div>`); s = await loadOne(sel.itemId); }
+    out.push(s ? { ...s, subject: s.subject || sel.subject || "" } : { subject: sel.subject || "", from: "", to: [], cc: [], date: "" });
+  }
+  return out;
+}
+function setMain(h) { $("#main").innerHTML = h; }
+
+async function refresh() {
+  const my = ++busy;
+  $("#out").hidden = true;
+  let selected = null;
+  if (Office.context.requirements.isSetSupported("Mailbox", "1.13") && Office.context.mailbox.getSelectedItemsAsync) {
+    selected = await new Promise(res => { try { Office.context.mailbox.getSelectedItemsAsync(r => res(r.status === Office.AsyncResultStatus.Succeeded ? r.value : null)); } catch { res(null); } });
+  }
+  if (selected && selected.length > 1) {
+    const items = await readSelected(selected.slice(0, 100));
+    if (my !== busy) return;
+    current = { v: 1, kind: "many", items };
+    renderMany(items, selected.length);
+  } else {
+    const item = await readCurrent();
+    if (my !== busy) return;
+    if (!item) { current = null; setMain(`<div class="hint">Open a sent order email, or select several emails, to check them against HSE Assistant.</div>`); return; }
+    current = { v: 1, kind: "one", items: [item] };
+    renderOne(item);
+  }
+}
+function actions() {
+  return `<button class="btn filled" id="open">Check in HSE Assistant</button>
+    <button class="btn outlined" id="copy">Copy for HSE Assistant</button>
+    <div class="hint">"Check" opens HSE Assistant in your browser. If it doesn't show the result, use "Copy", then press Ctrl+V on the Orders page of HSE Assistant.</div>`;
+}
+function renderOne(it) {
+  const ref = refOf(it.subject);
+  setMain(`<div class="card">
+      <div class="subj">${esc(it.subject || "(no subject)")}</div>
+      ${ref ? `<span class="badge b-ref">Order reference · <span class="mono">${esc(ref)}</span></span>` : `<span class="badge b-none">No order reference in the subject</span>`}
+      <div class="kv">To: ${esc(it.to.join(", ") || "—")}${it.cc.length ? `<br>CC: ${esc(it.cc.join(", "))}` : ""}<br>Date: ${esc(dmy(it.date))}</div>
+    </div>${actions()}`);
+  bind();
+}
+function renderMany(items, total) {
+  const withRef = items.filter(i => refOf(i.subject)).length;
+  setMain(`<div class="card">
+      <div class="subj">${total} emails selected</div>
+      <div class="kv">${withRef} have an order reference in the subject.${total > 100 ? " Only the first 100 are checked." : ""}</div>
+      <ul>${items.map(i => { const r = refOf(i.subject); return `<li><span>${esc(i.subject || "(no subject)")}</span>${r ? `<span class="r">${esc(r)}</span>` : `<span class="n">No order reference</span>`}</li>`; }).join("")}</ul>
+    </div>${actions()}`);
+  bind();
+}
+function bind() {
+  $("#open").onclick = () => {
+    if (!current) return;
+    const p = { ...current, items: current.items.map(i => ({ ...i, body: i.body ? i.body.slice(0, 2500) : undefined })) };
+    const url = APP_URL + "#" + encode(p);
+    try { if (Office.context.ui && Office.context.ui.openBrowserWindow) { Office.context.ui.openBrowserWindow(url); return; } } catch {}
+    window.open(url, "_blank");
+  };
+  $("#copy").onclick = async () => {
+    if (!current) return;
+    const text = encode(current);
+    const out = $("#out");
+    let ok = false;
+    try { await navigator.clipboard.writeText(text); ok = true; } catch {}
+    if (!ok) {
+      const ta = document.createElement("textarea"); ta.value = text; document.body.appendChild(ta); ta.select();
+      try { ok = document.execCommand("copy"); } catch {}
+      ta.remove();
+    }
+    out.hidden = false;
+    out.innerHTML = ok
+      ? `<div class="msg">Copied. Open HSE Assistant and press <b>Ctrl+V</b> on the Orders page.</div>`
+      : `<div class="msg info">Your Outlook blocked copying. Select the text below, press Ctrl+C, then paste it in HSE Assistant.</div><textarea id="manual" readonly>${esc(text)}</textarea>`;
+    const m = $("#manual"); if (m) { m.focus(); m.select(); }
+  };
+}
+
+Office.onReady(() => {
+  try { Office.context.mailbox.addHandlerAsync(Office.EventType.ItemChanged, refresh); } catch {}
+  try { if (Office.EventType.SelectedItemsChanged) Office.context.mailbox.addHandlerAsync(Office.EventType.SelectedItemsChanged, refresh); } catch {}
+  refresh();
+});
+</script>
+</body>
+</html>
