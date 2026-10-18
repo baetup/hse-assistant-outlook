@@ -62,8 +62,6 @@ textarea{width:100%;height:70px;font:11px var(--mono);border:1px solid var(--out
   <header><img src="assets/icon-64.png" alt=""><b>HSE Assistant</b></header>
   <div id="main"><div class="hint">Loading…</div></div>
   <div id="out" hidden></div>
-  <h2>Statuses &amp; categories</h2>
-  <div id="statusBox" class="card"></div>
 </div>
 <script>
 "use strict";
@@ -78,7 +76,6 @@ function parseRef(s) {
   const date = `${y}-${String(mo).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
   return { text: m[0].replace(/\s+/g, " ").trim(), sites, n: +(m[2] || 1), date, key: `${sites.join("+")}|${+(m[2] || 1)}|${date}` };
 }
-const STATUS_LABEL = { i: "Sent, nothing delivered yet", p: "Partially delivered", c: "Everything delivered", x: "Cancelled", d: "Draft in HSE Assistant", u: "Not tracked in HSE Assistant" };
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const iso = d => { d = d instanceof Date ? d : new Date(d); if (isNaN(d)) return ""; return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0"); };
@@ -87,7 +84,6 @@ const addrs = a => (a || []).map(x => x && x.emailAddress).filter(Boolean);
 const refOf = subj => { const r = parseRef(subj); return r ? r.text : ""; };
 const cleanSubject = s => String(s || "").replace(/^\s*((re|fw|fwd|sv|vs|aw|wg)\s*:\s*)+/i, "").trim();
 const normRef = s => String(s || "").toLowerCase().replace(/\//g, "").replace(/\s*\+\s*/g, "+").replace(/\s*-\s*/g, "-").replace(/\s+/g, " ").trim();
-const keyOf = subj => { const r = parseRef(subj); return r ? r.key : normRef(cleanSubject(subj)); };
 const ok = r => r && r.status === Office.AsyncResultStatus.Succeeded;
 
 function b64url(str) {
@@ -95,43 +91,7 @@ function b64url(str) {
   for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
   return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
-function unb64url(s) { let b = s.replace(/-/g, "+").replace(/_/g, "/"); while (b.length % 4) b += "="; const bin = atob(b); return new TextDecoder().decode(Uint8Array.from(bin, c => c.charCodeAt(0))); }
 const encode = obj => "HSEA1-" + b64url(JSON.stringify(obj));
-
-/* ---------- statuses from HSE Assistant (kept in the add-in's roaming settings) ---------- */
-let statuses = null; // {at, cats:{open,done,cancelled}, s:{key: i|c|x|d}}
-function loadStatuses() { try { const v = Office.context.roamingSettings.get("hses"); statuses = v ? JSON.parse(v) : null; } catch { statuses = null; } }
-function saveStatuses(obj) {
-  return new Promise(res => {
-    try { Office.context.roamingSettings.set("hses", JSON.stringify(obj)); Office.context.roamingSettings.saveAsync(r => res(ok(r))); } catch { res(false); }
-  });
-}
-function statusOf(subj) { if (!statuses) return null; const k = keyOf(subj); return statuses.s[k] || (refOf(subj) ? "u" : null); }
-function catFor(code) { if (!statuses) return ""; const c = statuses.cats || {}; return code === "i" ? c.open : code === "p" ? c.partial : code === "c" ? c.done : ""; }
-function ourCats() { const c = (statuses && statuses.cats) || {}; return [c.open, c.partial, c.done].filter(Boolean); }
-function autoCats() { try { return Office.context.roamingSettings.get("autoCats") !== false; } catch { return true; } }
-const statusBadge = code => code ? `<span class="badge b-${code}">${esc(STATUS_LABEL[code])}</span>` : "";
-
-/* ---------- categories ---------- */
-const canCats = () => Office.context.requirements.isSetSupported("Mailbox", "1.8");
-function promisify(fn) { return new Promise(res => { try { fn(r => res(r)); } catch (e) { res({ status: "failed", error: e }); } }); }
-async function ensureMaster(names) {
-  const mc = Office.context.mailbox.masterCategories; if (!mc) return;
-  const r = await promisify(cb => mc.getAsync(cb)); if (!ok(r)) return;
-  const have = new Set((r.value || []).map(c => c.displayName));
-  const C = Office.MailboxEnums.CategoryColor;
-  const color = n => n === (statuses.cats || {}).done ? C.Preset4 : n === (statuses.cats || {}).partial ? C.Preset1 : C.Preset0;
-  const missing = names.filter(n => n && !have.has(n)).map(n => ({ displayName: n, color: color(n) }));
-  if (missing.length) await promisify(cb => mc.addAsync(missing, cb));
-}
-async function setCategory(item, target) {
-  const r = await promisify(cb => item.categories.getAsync(cb)); if (!ok(r)) return false;
-  const cur = (r.value || []).map(c => c.displayName);
-  const rm = cur.filter(c => ourCats().includes(c) && c !== target);
-  if (rm.length) { const r2 = await promisify(cb => item.categories.removeAsync(rm, cb)); if (!ok(r2)) return false; }
-  if (target && !cur.includes(target)) { const r3 = await promisify(cb => item.categories.addAsync([target], cb)); if (!ok(r3)) return false; }
-  return true;
-}
 
 /* ---------- reading mail ---------- */
 let current = null; // {kind, items, ids}
@@ -229,25 +189,10 @@ async function refresh() {
   } else {
     const item = await readCurrent();
     if (my !== busy) return;
-    if (!item) { current = null; setMain(`<div class="hint">Open a sent order email, or select several emails, to check them against HSE Assistant.</div>`); renderStatusBox(); return; }
+    if (!item) { current = null; setMain(`<div class="hint">Open a sent order email, or select several emails, to check them against HSE Assistant.</div>`); return; }
     current = { kind: "one", items: [item], ids: null };
     renderOne(item);
-    renderStatusBox();
-    autoCategory(item);
-    return;
   }
-  renderStatusBox();
-}
-let masterChecked = false;
-async function autoCategory(item) {
-  if (!statuses || !canCats() || !autoCats()) return;
-  const target = catFor(statusOf(item.subject)); if (!target) return;
-  const it = Office.context.mailbox.item; if (!it || !it.categories) return;
-  const r = await promisify(cb => it.categories.getAsync(cb)); if (!ok(r)) return;
-  const cur = (r.value || []).map(c => c.displayName);
-  if (cur.includes(target) && !cur.some(c => ourCats().includes(c) && c !== target)) return;
-  if (!masterChecked) { await ensureMaster(ourCats()); masterChecked = true; }
-  if (await setCategory(it, target)) { const m = $("#catMsg"); if (m) m.innerHTML = `<div class="msg">Category set to “${esc(target)}”.</div>`; }
 }
 function actions() {
   const one = current && current.kind === "one";
@@ -256,22 +201,20 @@ function actions() {
     <button class="btn text" id="copy">Copy only</button>`;
 }
 function renderOne(it) {
-  const ref = refOf(it.subject); const st = statusOf(it.subject);
+  const ref = refOf(it.subject);
   setMain(`<div class="card">
       <div class="subj">${esc(it.subject || "(no subject)")}</div>
       ${ref ? `<span class="badge b-ref">Order reference · <span class="mono">${esc(ref)}</span></span>` : `<span class="badge b-none">No order reference in the subject</span>`}
-      ${statusBadge(st)}
       <div class="kv">To: ${esc(it.to.join(", ") || "—")}${it.cc.length ? `<br>CC: ${esc(it.cc.join(", "))}` : ""}<br>Date: ${esc(dmy(it.date))}</div>
     </div>${actions()}`);
   bind();
 }
 function renderMany(items, total) {
   const withRef = items.filter(i => refOf(i.subject)).length;
-  const untracked = statuses ? items.filter(i => statusOf(i.subject) === "u").length : null;
   setMain(`<div class="card">
       <div class="subj">${total} emails selected</div>
-      <div class="kv">${withRef} have an order reference in the subject.${untracked ? ` <b>${untracked} not tracked</b> as of the last status update.` : ""}${total > 100 ? " Only the first 100 are checked." : ""}</div>
-      <ul>${items.map(i => { const r = refOf(i.subject); const st = statusOf(i.subject); return `<li><span>${esc(i.subject || "(no subject)")}</span>${r ? `<span class="r">${esc(r)}</span>` : `<span class="n">No order reference</span>`}${statusBadge(st)}</li>`; }).join("")}</ul>
+      <div class="kv">${withRef} have an order reference in the subject.${total > 100 ? " Only the first 100 are checked." : ""}</div>
+      <ul>${items.map(i => { const r = refOf(i.subject); return `<li><span>${esc(i.subject || "(no subject)")}</span>${r ? `<span class="r">${esc(r)}</span>` : `<span class="n">No order reference</span>`}</li>`; }).join("")}</ul>
     </div>${actions()}`);
   bind();
 }
@@ -300,74 +243,7 @@ async function copy(text) {
   try { const ta = document.createElement("textarea"); ta.value = text; document.body.appendChild(ta); ta.select(); const r = document.execCommand("copy"); ta.remove(); return r; } catch { return false; }
 }
 
-/* ---------- status box ---------- */
-function renderStatusBox() {
-  const box = $("#statusBox");
-  const when = statuses && statuses.at ? new Date(statuses.at) : null;
-  const n = statuses ? Object.keys(statuses.s || {}).length : 0;
-  let applyBtn = "";
-  if (statuses && current && canCats()) {
-    if (current.kind === "one") {
-      const st = statusOf(current.items[0].subject);
-      const cat = catFor(st);
-      if (cat) applyBtn = `<button class="btn filled" id="apply">Set category “${esc(cat)}”</button>`;
-    } else {
-      const k = current.items.filter(i => catFor(statusOf(i.subject))).length;
-      if (k) applyBtn = `<button class="btn filled" id="apply">Set categories on ${k} email${k > 1 ? "s" : ""}</button>`;
-    }
-  }
-  box.innerHTML = `${statuses ? `<div class="kv">Statuses for ${n} orders, copied from HSE Assistant ${when ? when.toLocaleString("da-DK", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : ""}.</div>` : `<div class="kv">To see each order's status here and set Outlook categories, copy the statuses from HSE Assistant (Settings → Copy statuses for Outlook) and paste them below.</div>`}
-    ${applyBtn}
-    <div id="catMsg"></div>
-    ${statuses ? `<label class="check"><input type="checkbox" id="autoC" ${autoCats() ? "checked" : ""}> Set the category automatically when I open an order email</label>` : ""}
-    <button class="btn text" id="upd">${statuses ? "Update statuses" : "Paste statuses"}</button>
-    <div id="pasteBox" hidden><textarea id="stPaste" placeholder="Paste here (HSES1-…)"></textarea></div>`;
-  const ac = $("#autoC"); if (ac) ac.onchange = () => { try { Office.context.roamingSettings.set("autoCats", ac.checked); Office.context.roamingSettings.saveAsync(() => {}); } catch {} if (ac.checked && current && current.kind === "one") autoCategory(current.items[0]); };
-  $("#upd").onclick = () => { $("#pasteBox").hidden = false; $("#stPaste").focus(); };
-  $("#stPaste").oninput = async e => {
-    const m = /HSES1-([A-Za-z0-9_-]+)/.exec(e.target.value || "");
-    const msg = $("#catMsg");
-    if (!m) { msg.innerHTML = `<div class="msg err">That isn't the status text copied from HSE Assistant.</div>`; return; }
-    try {
-      const o = JSON.parse(unb64url(m[1]));
-      if (!o || typeof o.s !== "object") throw 0;
-      const oc = o.cats || {};
-      const clean = { at: String(o.at || ""), cats: { open: String(oc.open || ""), partial: String(oc.partial || ""), done: String(oc.done || "") }, s: {} };
-      Object.entries(o.s).slice(0, 450).forEach(([k, v]) => { if (/^[icpxd]$/.test(v)) clean.s[String(k).slice(0, 120)] = v; });
-      const saved = await saveStatuses(clean);
-      statuses = clean;
-      if (current && current.kind === "one") renderOne(current.items[0]); else if (current) renderMany(current.items, current.items.length);
-      renderStatusBox();
-      $("#catMsg").innerHTML = `<div class="msg">${saved ? "Statuses updated." : "Statuses loaded for now, but Outlook didn't save them for next time."}</div>`;
-      if (current && current.kind === "one") autoCategory(current.items[0]);
-    } catch { msg.innerHTML = `<div class="msg err">Couldn't read the statuses. Copy them again from HSE Assistant.</div>`; }
-  };
-  const ap = $("#apply"); if (ap) ap.onclick = applyCategories;
-}
-async function applyCategories() {
-  const msg = $("#catMsg"); const btn = $("#apply"); btn.disabled = true;
-  msg.innerHTML = `<div class="msg info">Updating categories…</div>`;
-  await ensureMaster(ourCats());
-  let done = 0, failed = 0;
-  if (current.kind === "one") {
-    const cat = catFor(statusOf(current.items[0].subject));
-    (await setCategory(Office.context.mailbox.item, cat)) ? done++ : failed++;
-  } else {
-    for (let i = 0; i < current.items.length; i++) {
-      const cat = catFor(statusOf(current.items[i].subject)); if (!cat) continue;
-      msg.innerHTML = `<div class="msg info">Updating ${i + 1} of ${current.items.length}…</div>`;
-      const r = await withLoaded(current.ids[i], it => setCategory(it, cat));
-      r ? done++ : failed++;
-    }
-  }
-  btn.disabled = false;
-  msg.innerHTML = failed
-    ? `<div class="msg err">Updated ${done}, couldn't update ${failed}. Open those emails one by one and try again.</div>`
-    : `<div class="msg">Category set on ${done} email${done === 1 ? "" : "s"}.</div>`;
-}
-
 Office.onReady(() => {
-  loadStatuses();
   try { Office.context.mailbox.addHandlerAsync(Office.EventType.ItemChanged, refresh); } catch {}
   try { if (Office.EventType.SelectedItemsChanged) Office.context.mailbox.addHandlerAsync(Office.EventType.SelectedItemsChanged, refresh); } catch {}
   refresh();
