@@ -124,10 +124,54 @@ async function setCategory(item, target) {
 let current = null; // {kind, items, ids}
 let busy = 0;
 function itemSummary(it) { return { subject: it.subject || "", from: it.from ? it.from.emailAddress || "" : "", to: addrs(it.to), cc: addrs(it.cc), date: iso(it.dateTimeCreated) }; }
+/* Turn the email's HTML into plain lines we control: table rows become tab-separated lines,
+   list items keep their numbers, so size tables survive. */
+function htmlToText(html) {
+  const doc = new DOMParser().parseFromString(String(html || ""), "text/html");
+  const out = [];
+  const cellText = el => (el.textContent || "").replace(/\s+/g, " ").trim();
+  const BLOCK = /^(P|DIV|H[1-6]|UL|OL|TR|BLOCKQUOTE|PRE|HR|SECTION|ARTICLE|CENTER|DL|DT|DD)$/;
+  function walk(n) {
+    if (n.nodeType === 3) { out.push(n.nodeValue.replace(/\s+/g, " ")); return; }
+    if (n.nodeType !== 1) return;
+    const t = n.tagName.toUpperCase();
+    if (/^(STYLE|SCRIPT|HEAD|TITLE|META|IMG|SVG|O:P|XML)$/.test(t)) return;
+    if (t === "BR") { out.push("\n"); return; }
+    if (t === "TABLE") {
+      out.push("\n");
+      n.querySelectorAll("tr").forEach(tr => {
+        if (tr.closest("table") !== n) return;
+        const cells = [...tr.children].filter(c => /^(TD|TH)$/i.test(c.tagName));
+        if (cells.some(c => c.querySelector("table"))) { cells.forEach(c => { out.push("\n"); c.childNodes.forEach(walk); out.push("\n"); }); return; }
+        out.push(cells.map(cellText).join("\t") + "\n");
+      });
+      out.push("\n"); return;
+    }
+    if (t === "LI") {
+      const par = n.parentElement; let idx = "• ";
+      if (par && par.tagName.toUpperCase() === "OL") { const start = parseInt(par.getAttribute("start") || "1", 10) || 1; idx = (start + [...par.children].filter(c => c.tagName.toUpperCase() === "LI").indexOf(n)) + ". "; }
+      out.push("\n" + idx); n.childNodes.forEach(walk); out.push("\n"); return;
+    }
+    const block = BLOCK.test(t);
+    if (block) out.push("\n");
+    n.childNodes.forEach(walk);
+    if (block) out.push("\n");
+  }
+  if (doc.body) walk(doc.body);
+  return out.join("").split("\n").map(l => l.replace(/[ \u00a0]+/g, " ").replace(/ *\t */g, "\t").trim()).join("\n").replace(/\n{3,}/g, "\n\n").trim();
+}
 function readCurrent() {
   const it = Office.context.mailbox.item; if (!it) return Promise.resolve(null);
   const base = itemSummary(it);
-  return new Promise(res => { try { it.body.getAsync(Office.CoercionType.Text, r => { base.body = ok(r) ? String(r.value || "").slice(0, 6000) : ""; res(base); }); } catch { res(base); } });
+  const asText = res => { try { it.body.getAsync(Office.CoercionType.Text, r => { base.body = ok(r) ? String(r.value || "").slice(0, 20000) : ""; res(base); }); } catch { res(base); } };
+  return new Promise(res => {
+    try {
+      it.body.getAsync(Office.CoercionType.Html, r => {
+        if (!ok(r)) return asText(res);
+        try { base.body = htmlToText(r.value).slice(0, 20000); res(base); } catch { asText(res); }
+      });
+    } catch { asText(res); }
+  });
 }
 function withLoaded(id, fn) {
   return new Promise(res => {
@@ -202,7 +246,7 @@ function renderMany(items, total) {
 function bind() {
   $("#open").onclick = () => {
     if (!current) return;
-    const p = { v: 1, kind: current.kind, items: current.items.map(i => ({ ...i, body: i.body ? i.body.slice(0, 2500) : undefined })) };
+    const p = { v: 1, kind: current.kind, items: current.items.map(i => ({ ...i, body: i.body ? i.body.slice(0, 4000) : undefined })) };
     const url = APP_URL + "#" + encode(p);
     try { if (Office.context.ui && Office.context.ui.openBrowserWindow) { Office.context.ui.openBrowserWindow(url); return; } } catch {}
     window.open(url, "_blank");
